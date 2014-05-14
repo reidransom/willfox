@@ -1,0 +1,137 @@
+#!/usr/bin/env python3.4
+
+import os
+import sys
+import subprocess
+from datetime import datetime
+import shutil
+import inspect
+
+subcommands = ['init', 'update', 'backup', 'revert']
+
+def usage(msg=''):
+    if msg:
+        sys.stderr.write(msg + '\n')
+    sys.stderr.write("""willfox %s [<app_name>]
+
+If app_name is not provided, it will try to be determined by the cwd.
+""" % '|'.join(subcommands))
+    sys.exit(1)
+
+def get_current_file_path():
+    return os.path.abspath(inspect.getfile(inspect.currentframe()))
+
+def die(message):
+    sys.stderr.write(message + '\n')
+    sys.exit(1)
+
+def log(message):
+    sys.stdout.write(message + '\n')
+    sys.stdout.flush()
+
+def run(cmd, before_msg='', after_msg=''):
+    if before_msg:
+        if before_msg == 'cmd':
+            log(cmd)
+        else:
+            log(before_msg)
+    subprocess.call(cmd, shell=True)
+    if after_msg:
+        log(after_msg)
+
+def detect_app_name():
+    cwd = os.getcwd()
+    dirs = cwd.split('/')
+    if dirs[1] == 'home' and dirs[3] == 'webapps' and dirs[4]:
+        return dirs[4]
+    else:
+        return False
+
+class WebApp():
+    
+    def __init__(self, name):
+        self.name = name
+        self.dir = os.path.expanduser('~/webapps/' + name)
+        self.work_tree = os.path.join(self.dir, 'repo')
+        self.git_dir   = os.path.join(self.dir, 'repo/.git')
+        self.origin    = os.path.join(self.dir, 'repo.git')
+
+    def git(self, cmd):
+        run('bash -c "WORK_TREE=%s GIT_DIR=%s %s"' % (self.work_tree, self.git_dir, cmd), 'cmd')
+
+    def stop(self):
+        log('Stopping server.')
+        run(os.path.join(self.dir, 'bin/stop'))
+
+    def start(self):
+        log('Starting server.')
+        run(os.path.join(self.dir, 'bin/start'))
+
+    def backup(self):
+        bu_src = os.path.join(self.dir, 'repo')
+        bu_dest = os.path.join(self.dir, 'backups')
+        t = datetime.now().strftime('%Y%m%d%H%M%S')
+        if not os.path.isdir(bu_src):
+            log(bu_src + ' is not a directory.')
+            return
+        if not os.path.exists(bu_dest):
+            os.makedirs(bu_dest)
+        if not os.path.isdir(bu_dest):
+            die(bu_dest + ' is not a directory.')
+        cmd = 'rsync -a %(bu_src)s %(bu_dest)s/%(t)s/' % locals()
+        run(cmd, 'Creating backup %(t)s...' % locals(), 'Done.\n')
+
+    def pull_latest(self):
+        log('Updating git repo.')
+        if os.path.exists(self.work_tree):
+            shutil.rmtree(self.work_tree)
+        os.chdir(self.dir)
+        run('git clone repo.git repo', 'cmd')
+
+    def npm_install(self):
+        log('Running npm install.')
+        os.chdir(os.path.join(self.dir, 'repo'))
+        npm = os.path.join(self.dir, 'bin/npm')
+        run('%(npm)s install --production' % locals())
+        log('npm install' + os.getcwd())
+        log('npm install' + npm)
+
+    def update(self):
+        self.stop()
+        self.backup()
+        self.pull_latest()
+        self.npm_install()
+        self.start()
+
+    def init(self):
+        os.chdir(self.dir)
+        run('GIT_DIR=repo.git git init')
+        os.chdir(self.origin)
+        with open('hooks/post-update', 'w') as fp:
+            fp.write("""#!/bin/sh
+exec %s update
+""" % get_current_file_path())
+            fp.close()
+        run('chmod 755 hooks/post-update')
+
+if __name__ == '__main__':
+    
+    # Get the subcommand
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        usage('Number of args should be 2 or 3.')
+    if not sys.argv[1] in subcommands:
+        usage('Subcommand not defined.')
+    subcommand = sys.argv[1]
+    
+    # Determine the app name
+    app_name = ''
+    if len(sys.argv) == 3:
+        app_name = sys.argv[2]
+    else:
+        app_name = detect_app_name()
+    if not app_name:
+        usage('Could not determine app name.  Please provide it.')
+    app = WebApp(app_name)
+    
+    # Perform the subcommand
+    getattr(app, subcommand)()
