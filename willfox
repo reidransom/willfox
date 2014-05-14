@@ -55,16 +55,17 @@ class WebApp():
         self.work_tree = os.path.join(self.dir, 'repo')
         self.git_dir   = os.path.join(self.dir, 'repo/.git')
         self.origin    = os.path.join(self.dir, 'repo.git')
+        self.tmp_dir   = os.path.join(self.dir, 'tmp')
 
     def git(self, cmd):
         run('bash -c "WORK_TREE=%s GIT_DIR=%s %s"' % (self.work_tree, self.git_dir, cmd), 'cmd')
 
     def stop(self):
-        log('Stopping server.')
+        log('\nStopping server.')
         run(os.path.join(self.dir, 'bin/stop'))
 
     def start(self):
-        log('Starting server.')
+        log('\nStarting server.')
         run(os.path.join(self.dir, 'bin/start'))
 
     def backup(self):
@@ -79,27 +80,31 @@ class WebApp():
         if not os.path.isdir(bu_dest):
             die(bu_dest + ' is not a directory.')
         cmd = 'rsync -a %(bu_src)s %(bu_dest)s/%(t)s/' % locals()
-        run(cmd, 'Creating backup %(t)s...' % locals(), 'Done.\n')
-
-    def pull_latest(self):
-        log('Updating git repo.')
-        if os.path.exists(self.work_tree):
-            shutil.rmtree(self.work_tree)
-        os.chdir(self.dir)
-        run('git clone repo.git repo', 'cmd')
+        run(cmd, '\nCreating backup %(t)s...' % locals(), 'Done.\n')
 
     def npm_install(self):
-        log('Running npm install.')
+        log('\nRunning npm install.')
         os.chdir(os.path.join(self.dir, 'repo'))
         npm = os.path.join(self.dir, 'bin/npm')
         run('%(npm)s install --production' % locals())
-        log('npm install' + os.getcwd())
-        log('npm install' + npm)
 
     def update(self):
         self.stop()
         self.backup()
-        self.pull_latest()
+        
+        if os.path.exists(self.tmp_dir):
+            shutil.rmtree(self.tmp_dir)
+        os.chdir(self.dir)
+        run('git clone repo.git tmp', 'cmd')
+        
+        # Verbosely sync changed files.
+        run('rsync -rulv --checksum --exclude .git tmp/ repo/', '\nUpdating changed files...')
+        
+        # Silently sync the .git repo.
+        run('rsync -rul --checksum tmp/ repo/')
+        
+        shutil.rmtree(self.tmp_dir)
+
         self.npm_install()
         self.start()
 
